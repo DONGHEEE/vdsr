@@ -1,0 +1,244 @@
+import tensorflow as tf
+import h5py
+import numpy as np
+import matplotlib.pyplot as plt
+import string
+import cv2
+import random
+import time
+import os
+
+
+timeStart = time.time()
+batch_size = 50
+
+
+
+learning_rate = 0.000001
+train_num = 5000000      #50만회
+epoch_cost_string=""
+
+def ycbcr2rgb(im):
+    xform = np.array([[1, 0, 1.402], [1, -0.34414, -.71414], [1, 1.772, 0]])
+    rgb = im.astype(np.float)
+    rgb[:,:,[1,2]] -= 128
+    rgb = rgb.dot(xform.T)
+    np.putmask(rgb, rgb > 255.0, 255.0)
+    np.putmask(rgb, rgb < 0.0, 0.0)
+    return np.float32(rgb)
+
+def create_blank(width, height, rgb_color=(0, 0, 0)):
+    """Create new image(numpy array) filled with certain color in RGB"""
+    # Create black blank imag
+    image = np.zeros((height, width, 3), np.float64)
+
+    # Since OpenCV uses BGR, convert the color first
+    color = tuple(reversed(rgb_color))
+    # Fill image with color
+    image[:] = color
+
+    return image
+
+class ImageColor:
+    def __init__(self, w, h):
+        self.width = w
+        self.height = h
+        self.d = 3
+        self.colorList = create_blank(self.width, self.height, (0,0,0))
+
+    def getColorList(self):
+        return self.colorList
+
+    def getWidth(self):
+        return self.width
+
+    def getHeight(self):
+        return self.height
+
+    def setColorList(self,data):
+        self.colorList = data
+
+
+def data_iterator(input, label, batch_size):
+    num_examples = input.shape[0]
+    print(num_examples)   # 15986 나오면 성공
+    num_batch = num_examples // batch_size
+    num_total = num_batch * batch_size
+    while(True):
+        perm = np.arange(num_examples)
+        np.random.shuffle(perm)
+        shuf_data = input[perm]
+        shuf_label = label[perm]
+        # shuf_data = [(input[i].getColorList().reshape(1,input[i].getWidth(),input[i].getHeight(),3)) for i in perm]
+        # shuf_label = [(label[i].getColorList().reshape(1,label[i].getWidth(),label[i].getHeight(),3)) for i in perm]
+        for i in range(0, num_total, batch_size):
+            batch_data = shuf_data[i:i+batch_size]
+            batch_label = shuf_label[i:i+batch_size]
+            yield batch_data, batch_label
+
+def init_weights(shape):
+    return tf.Variable(tf.random_normal(shape, stddev=0.01))
+
+
+with h5py.File('train_py_forT.h5','r') as hf:
+    hf_data = hf.get('test_input')
+    data_p = np.array(hf_data)
+    hf_label = hf.get('test_label')
+    label_p = np.array(hf_label)
+
+#
+# with h5py.File('train_DS_256_py.h5','r') as hf:
+#     hf_data = hf.get('input')
+#     data_p = np.array(hf_data)
+#     hf_label = hf.get('label')
+#     label_p = np.array(hf_label)
+#
+# data[1].append(data_p)
+# label[1].append(label_p)
+#
+# with h5py.File('train_DS_512_py.h5','r') as hf:
+#     hf_data = hf.get('input')
+#     data_p = np.array(hf_data)
+#     hf_label = hf.get('label')
+#     label_p = np.array(hf_label)
+#
+# data[2].append(data_p)
+# label[2].append(label_p)
+#
+#
+# with h5py.File('test_py_DS.h5','r') as hf:
+#     hf_test_data = hf.get('test_input')
+#     test_data = np.array(hf_test_data)
+#     hf_test_label = hf.get('test_label')
+#     test_label = np.array(hf_test_label)
+
+# a = np.array(data[0])
+
+def train_data(save_path):
+    asd = save_path
+    filein = open(asd, 'r')
+    # filein.seek(7)
+    line = filein.readline()
+    line = line.split()
+    height, width = int(line[0]), int(line[1])
+    image = create_blank(width, height, (0, 0, 0))
+    image = np.array(image)
+    while True:
+        line = filein.readline()
+        if not line:
+            break
+        line = line.split()
+        x = int(line[0])  # row
+        y = int(line[1])  # col
+        if x != height and y != width:
+            image[x][y] = (float(line[2]), float(line[3]), float(line[4]))  # bgr
+    filein.close()
+    # cv2.imwrite('randomRGB.jpg', image)
+    data = np.array(image, dtype="float32")
+    data = data.reshape(1,height,width,3)
+    return data
+
+# arr_input = train_data("/Users/jhkimMultiGpus/PycharmProjects/tf_Tutorial/VDSR/Test/Sequence/SequenceText/input")
+# print(len(arr_input))
+# arr_label = train_data("/Users/jhkimMultiGpus/PycharmProjects/tf_Tutorial/VDSR/Test/Sequence/SequenceText/label")
+batch = data_iterator(data_p, label_p, batch_size)
+
+X = tf.placeholder(shape=[None, 80, 80, 3], dtype = "float32")
+Y = tf.placeholder(shape=[None, 80, 80, 3], dtype = "float32")
+
+w1 = init_weights([5, 5, 3, 64])
+w2 = init_weights([5, 5, 64, 32])
+w3 = init_weights([5, 5, 32, 3])
+
+b1 = tf.Variable(tf.zeros([64]), name="Bias1")
+b2 = tf.Variable(tf.zeros([32]), name="Bias2")
+b3 = tf.Variable(tf.zeros([3]), name="Bias3")
+
+layer1 = tf.nn.relu(tf.nn.conv2d(X, w1, strides=[1, 1, 1, 1], padding='SAME') + b1)
+layer2 = tf.nn.relu(tf.nn.conv2d(layer1, w2, strides=[1, 1, 1, 1], padding='SAME') + b2)
+hypothesis = tf.nn.conv2d(layer2, w3, strides=[1, 1, 1, 1], padding='SAME') + b3
+
+
+cost = tf.reduce_mean(tf.reduce_sum(tf.square((Y-X)-hypothesis), reduction_indices=0))
+
+var_list = [w1,w2,w3,b1,b2,b3]
+
+optimizer = tf.train.AdamOptimizer(learning_rate).minimize(cost, var_list=var_list)
+step=0
+
+checkpoint_dir = "cps_DS/"
+epoch_file = open('train_epoch_cost_DS','a')
+
+with tf.Session() as sess:
+    sess.run(tf.global_variables_initializer())
+    saver = tf.train.Saver()
+    ckpt = tf.train.get_checkpoint_state(checkpoint_dir)
+
+    print('start tf.Session()')
+    if ckpt and ckpt.model_checkpoint_path:
+        print('load learning')
+        saver.restore(sess, ckpt.model_checkpoint_path)
+    idx = 0
+    for i in range(train_num):
+        batch_data, batch_label = batch.__next__()
+        # print(np.array(batch_data).shape, np.array(batch_label).shape)
+        # sess.run(optimizer, feed_dict={X: data, Y: label})
+        sess.run(optimizer, feed_dict={X: batch_data, Y: batch_label})
+        if i % 100 == 0:
+            print("step: %d , time: %d" %(step, time.time() - timeStart))
+
+        step += 1
+
+        if step % 1000 == 0:
+            print_step = step
+            epoch_cost_string = "[epoch] : " + (str)(print_step) + " [cost] : "
+            current_cost_sum = 0.0
+            #mean_batch_size = (int)((data.shape[0] / 10))
+            #ix = random.randrange(0, batch_size)
+
+            for j in range(0, batch_size):
+                current_cost_sum += sess.run(cost, feed_dict={X: batch_data[j].reshape(1,80,80,3),
+                                                              Y: batch_label[j].reshape(1,80,80,3)})
+
+            epoch_cost_string += str(float(current_cost_sum / batch_size))
+            # epoch_cost_string+=" [learning_rate] : "+(str)(learning_rate)
+            epoch_cost_string += "\n"
+            print(epoch_cost_string)
+
+        if step % 10000 == 0:
+            # pwd="/Users/jhkimMultiGpus/Desktop/Test/input/inputText/" + 'input_Test' + str((idx%5)+1) + '.txt'
+            pwd = "/Users/jhkimMultiGpus/Desktop/Test/input/inputText/" + 'input_Test' + str((idx % 5) + 1) + '.txt'
+
+            test_data = train_data(pwd)
+            test_layer1 = tf.nn.relu(tf.nn.conv2d(test_data, w1, strides=[1, 1, 1, 1], padding='SAME') + b1)
+            test_layer2 = tf.nn.relu(tf.nn.conv2d(test_layer1, w2, strides=[1, 1, 1, 1], padding='SAME') + b2)
+            test_hypothesis = tf.nn.conv2d(test_layer2, w3, strides=[1, 1, 1, 1], padding='SAME') + b3
+
+            output_image = sess.run(test_hypothesis)[0, :, :, 0:3]
+            # high quality image = residual image + input image (VDSR)
+            output_image += test_data[0, :, :, 0:3]
+            output_image = (output_image * 255).astype('uint8')
+            output_image = np.uint8(np.clip(output_image, 0, 255))
+            temp_image = cv2.cvtColor(output_image, cv2.COLOR_YCrCb2RGB)
+            temp_image2 = ycbcr2rgb(output_image)
+            temp_image2 = np.uint8(np.clip(temp_image2, 0, 255))
+            # output_image = cv2.cvtColor(output_image,cv2.COLOR_RGB2BGR)
+            plt.imshow(temp_image)
+
+            subname2 = "shot_DS/testing/" + str(step) + ".jpg"          #test
+            # tmp_image = cv2.cvtColor(tmp_image, cv2.COLOR_RGB2BGR)
+            cv2.imwrite(subname2, temp_image2)
+
+            subname = "shot_DS/" + str(step) + ".jpg"
+
+            plt.savefig(subname)
+
+            saver.save(sess, checkpoint_dir + 'model.ckpt', print_step)
+            train_file_num = step
+            #train_file = open('train_num_epoch', 'w')
+            #train_file.write('%d' % train_file_num)
+            epoch_file.write(epoch_cost_string)
+            idx += 1
+
+endTime = time.time() - timeStart
+print("Time: ", endTime)
